@@ -5,7 +5,7 @@ import mechfight as mf
 
 
 class Bot:
-    name = "Orbit Strider 1.25"
+    name = "Orbit Strider 0.25"
 
     def __init__(self, hello: mf.Hello):
         self.anchor = None
@@ -67,7 +67,7 @@ class Bot:
                 cost = 3 * max(0, future_dist - radius + margin)
                 cost += 6 * max(0, math.dist((px, py), zone["center"]) - zone["radius"])
                 if strafe:
-                    cost -= 1.25 * stride * (dx * strafe[0] + dy * strafe[1])
+                    cost -= 0.25 * stride * (dx * strafe[0] + dy * strafe[1])
                 if goal:
                     cost += 0.65 * math.dist((px, py), goal["pos"][:2])
                 for ax, ay, reach in threats:
