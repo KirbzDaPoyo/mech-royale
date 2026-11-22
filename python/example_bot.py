@@ -5,7 +5,7 @@ import mechfight as mf
 
 
 class Bot:
-    name = "Orbit Courier"
+    name = "Orbit Strider 1.25"
 
     def __init__(self, hello: mf.Hello):
         self.anchor = None
@@ -50,25 +50,10 @@ class Bot:
             ox, oy = opponent["pos"][:2]
             separation = max(1, math.hypot(ox - x, oy - y))
             strafe = (self.turn * (y - oy) / separation, self.turn * (ox - x) / separation)
-        hold_drop = False
-        if me["in_zone"] and not opponent and not threats:
-            eligible = []
-            for drop in obs.get("drops", []):
-                gap = horizontal(drop)
-                travel = max(0, gap - drop["radius"] / 2) / me["stats"]["walk_speed"]
-                inside_next = math.dist(drop["pos"][:2], (cx, cy)) + drop["radius"] <= radius
-                if (inside_next and travel <= 12 and drop["lands_in"] <= travel + 2
-                        and drop["holder"] in (None, me["id"])
-                        and (gap > drop["radius"] or abs(z - drop["pos"][2]) <= 4)):
-                    eligible.append(drop)
-            if eligible:
-                goal = min(eligible, key=horizontal)
-                margin = min(margin, goal["radius"])
-                hold_drop = horizontal(goal) <= goal["radius"] / 2
         must_move = strafe or distance > max(1, radius - margin) or threats or not me["in_zone"] or goal
         move = [0.0, 0.0]
         now = obs["t"]
-        if must_move and not hold_drop:
+        if must_move:
             inward = math.atan2(cy - y, cx - x)
             stride = min(14, max(1, distance)) if radius < 15 else 14
             if goal:
@@ -82,7 +67,7 @@ class Bot:
                 cost = 3 * max(0, future_dist - radius + margin)
                 cost += 6 * max(0, math.dist((px, py), zone["center"]) - zone["radius"])
                 if strafe:
-                    cost -= 0.75 * stride * (dx * strafe[0] + dy * strafe[1])
+                    cost -= 1.25 * stride * (dx * strafe[0] + dy * strafe[1])
                 if goal:
                     cost += 0.65 * math.dist((px, py), goal["pos"][:2])
                 for ax, ay, reach in threats:
