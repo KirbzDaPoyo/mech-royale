@@ -2,19 +2,18 @@
 import math
 
 import mechfight as mf
-from arena_nav import Arena
 
 
 class Bot:
-    name = "Orbit Shelter"
+    name = "Orbit Outrider"
 
     def __init__(self, hello: mf.Hello):
         self.anchor = None
         self.anchor_time = 0
+        self.opening_departed = False
         self.jet_until = 0
         self.turn = 1 if hello["slot"] % 2 else -1
         self.rules = hello["config"]
-        self.arena = Arena(hello["map"]["dir"], self.rules["mech"]["step_up"])
         self.drone_range = self.rules["npc"]["aggro_range"]
 
     def act(self, obs: mf.Observation) -> mf.Action:
@@ -52,7 +51,17 @@ class Bot:
             ox, oy = opponent["pos"][:2]
             separation = max(1, math.hypot(ox - x, oy - y))
             strafe = (self.turn * (y - oy) / separation, self.turn * (ox - x) / separation)
-        must_move = strafe or distance > max(1, radius - margin) or threats or not me["in_zone"] or goal
+        outside_goal = distance > max(1, radius - margin)
+        rotate = outside_goal
+        if (outside_goal and not self.opening_departed and me["in_zone"]
+                and zone["radius"] == self.rules["zone"]["start_radius"]
+                and obs["t"] < zone["shrink_start"]):
+            # Budget twice straight-line walking time plus a fixed obstacle allowance.
+            travel = (distance - radius + margin) / me["stats"]["walk_speed"]
+            rotate = zone["shrink_start"] - obs["t"] <= 2 * travel + 12
+            if rotate:
+                self.opening_departed = True
+        must_move = strafe or rotate or threats or not me["in_zone"] or goal
         move = [0.0, 0.0]
         now = obs["t"]
         if must_move:
@@ -74,14 +83,6 @@ class Bot:
                     cost += 0.65 * math.dist((px, py), goal["pos"][:2])
                 for ax, ay, reach in threats:
                     cost += max(0, reach - math.hypot(px - ax, py - ay))
-                # Reward reachable cover only inside the upcoming safe circle.
-                if (opponent and me["grounded"] and me["in_zone"] and future_dist < radius - margin
-                        and self.arena.nearby_cover(px, py, z, me["stats"], opponent["pos"])):
-                    clear_path = all(self.arena.clear(x + f * dx * stride, y + f * dy * stride,
-                                                      z, me["stats"]["radius"], me["stats"]["height"])
-                                     for f in (0.25, 0.5, 0.75, 1))
-                    if clear_path:
-                        cost -= 1.5 * stride
                 if cost < best_cost:
                     best_cost = cost
                     move = [dx, dy]
