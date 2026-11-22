@@ -50,3 +50,17 @@ class Arena:
                     if inside:
                         return False
         return True
+
+    def nearby_cover(self, x, y, z, stats, opponent):
+        # Sample the sightline near the proposed destination, using the top of
+        # our mech so a low wall cannot qualify as full-body cover.
+        ox, oy, oz = opponent
+        distance = math.hypot(ox - x, oy - y)
+        for offset in (4, 8, 12, 18, 24):
+            if offset >= distance:
+                break
+            t = offset / distance
+            sample_z = (1 - t) * (z + stats["height"]) + t * (oz + 7)
+            if not self.clear(x + t * (ox - x), y + t * (oy - y), sample_z, 0, 0.01):
+                return True
+        return False

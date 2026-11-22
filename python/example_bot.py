@@ -2,18 +2,19 @@
 import math
 
 import mechfight as mf
+from arena_nav import Arena
 
 
 class Bot:
-    name = "Orbit Mender"
+    name = "Orbit Shelter"
 
     def __init__(self, hello: mf.Hello):
-        self.recovering = False
         self.anchor = None
         self.anchor_time = 0
         self.jet_until = 0
         self.turn = 1 if hello["slot"] % 2 else -1
         self.rules = hello["config"]
+        self.arena = Arena(hello["map"]["dir"], self.rules["mech"]["step_up"])
         self.drone_range = self.rules["npc"]["aggro_range"]
 
     def act(self, obs: mf.Observation) -> mf.Action:
@@ -24,18 +25,9 @@ class Bot:
         radius = zone["next_radius"]
         margin = min(28, radius * 0.22)
         distance = math.hypot(cx - x, cy - y)
-        health_fraction = me["hp"] / me["max_hp"]
-        if health_fraction <= 0.60:
-            self.recovering = True
-        elif health_fraction >= 0.85:
-            self.recovering = False
-        # In a tight final circle, breaking contact may be impossible.
-        seek_recovery = self.recovering and radius >= 75
         threats = []
         for actor in obs["mechs"]:
             reach = 110 if actor["kind"] == "mech" else self.drone_range + 12
-            if seek_recovery and actor["kind"] == "mech":
-                reach = max(reach, self.rules["vision"]["range"] + 20)
             ax, ay = actor["pos"][:2]
             if math.hypot(ax - x, ay - y) < reach:
                 threats.append((ax, ay, reach))
@@ -82,6 +74,14 @@ class Bot:
                     cost += 0.65 * math.dist((px, py), goal["pos"][:2])
                 for ax, ay, reach in threats:
                     cost += max(0, reach - math.hypot(px - ax, py - ay))
+                # Reward reachable cover only inside the upcoming safe circle.
+                if (opponent and me["grounded"] and me["in_zone"] and future_dist < radius - margin
+                        and self.arena.nearby_cover(px, py, z, me["stats"], opponent["pos"])):
+                    clear_path = all(self.arena.clear(x + f * dx * stride, y + f * dy * stride,
+                                                      z, me["stats"]["radius"], me["stats"]["height"])
+                                     for f in (0.25, 0.5, 0.75, 1))
+                    if clear_path:
+                        cost -= 1.5 * stride
                 if cost < best_cost:
                     best_cost = cost
                     move = [dx, dy]
@@ -107,11 +107,7 @@ class Bot:
         targets = [m for m in obs["mechs"] if horizontal(m) <= max_range
                    and (m["kind"] == "mech" or horizontal(m) < self.drone_range)]
         target = min(targets, key=horizontal, default=None)
-        if seek_recovery:
-            # Return fire at close threats. At distance, give the regen timer time to run.
-            targets = [actor for actor in targets if horizontal(actor) <= self.drone_range]
-            target = min(targets, key=horizontal, default=None)
-        if target is None and not seek_recovery:
+        if target is None:
             target = min((c for c in obs["crates"] if horizontal(c) < 120),
                          key=horizontal, default=None)
         if target:
@@ -136,10 +132,7 @@ class Bot:
                 use_secondary = aligned and dist <= secondary["stats"]["range"]
             action["fire"] = [aligned and dist <= gun_stats["range"], use_secondary]
         else:
-            if seek_recovery and opponent:
-                action["aim"] = [math.atan2(oy - y, ox - x), 0]
-            else:
-                action["aim"] = [math.remainder(now * 0.85 * self.turn, math.tau), 0]
+            action["aim"] = [math.remainder(now * 0.85 * self.turn, math.tau), 0]
             action["reload"] = gun["ammo"] < gun_stats["mag"] and not gun["reload"]
         if obs["offer"]:
             priorities = ["armor", "plating", "nanites", "servos", "reactor"]
