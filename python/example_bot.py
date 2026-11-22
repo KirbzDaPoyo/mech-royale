@@ -5,9 +5,10 @@ import mechfight as mf
 
 
 class Bot:
-    name = "Orbit Forager"
+    name = "Orbit Mender"
 
     def __init__(self, hello: mf.Hello):
+        self.recovering = False
         self.anchor = None
         self.anchor_time = 0
         self.jet_until = 0
@@ -23,9 +24,18 @@ class Bot:
         radius = zone["next_radius"]
         margin = min(28, radius * 0.22)
         distance = math.hypot(cx - x, cy - y)
+        health_fraction = me["hp"] / me["max_hp"]
+        if health_fraction <= 0.60:
+            self.recovering = True
+        elif health_fraction >= 0.85:
+            self.recovering = False
+        # In a tight final circle, breaking contact may be impossible.
+        seek_recovery = self.recovering and radius >= 75
         threats = []
         for actor in obs["mechs"]:
             reach = 110 if actor["kind"] == "mech" else self.drone_range + 12
+            if seek_recovery and actor["kind"] == "mech":
+                reach = max(reach, self.rules["vision"]["range"] + 20)
             ax, ay = actor["pos"][:2]
             if math.hypot(ax - x, ay - y) < reach:
                 threats.append((ax, ay, reach))
@@ -45,16 +55,6 @@ class Bot:
         opponents = [m for m in obs["mechs"] if m["kind"] == "mech"
                      and horizontal(m) <= gun["stats"]["range"]]
         opponent = min(opponents, key=horizontal, default=None)
-        # Close on safe crates while firing so their cubes are within reach when they break.
-        crate_goal = None
-        if not goal and not opponent and not threats and me["in_zone"] and me["cubes"] < self.rules["cubes"]["stat_cap"]:
-            candidates = [item for item in (*obs["cubes"], *obs["crates"])
-                          if horizontal(item) < 120 and abs(item["pos"][2] - z) <= 4
-                          and math.dist(item["pos"][:2], (cx, cy)) < radius - margin]
-            if candidates:
-                goal = min(candidates, key=lambda item: ("hp" in item, horizontal(item)))
-                if "hp" in goal:
-                    crate_goal = goal
         strafe = None
         if opponent:
             ox, oy = opponent["pos"][:2]
@@ -107,9 +107,11 @@ class Bot:
         targets = [m for m in obs["mechs"] if horizontal(m) <= max_range
                    and (m["kind"] == "mech" or horizontal(m) < self.drone_range)]
         target = min(targets, key=horizontal, default=None)
-        if target is None:
-            target = crate_goal
-        if target is None:
+        if seek_recovery:
+            # Return fire at close threats. At distance, give the regen timer time to run.
+            targets = [actor for actor in targets if horizontal(actor) <= self.drone_range]
+            target = min(targets, key=horizontal, default=None)
+        if target is None and not seek_recovery:
             target = min((c for c in obs["crates"] if horizontal(c) < 120),
                          key=horizontal, default=None)
         if target:
@@ -134,7 +136,10 @@ class Bot:
                 use_secondary = aligned and dist <= secondary["stats"]["range"]
             action["fire"] = [aligned and dist <= gun_stats["range"], use_secondary]
         else:
-            action["aim"] = [math.remainder(now * 0.85 * self.turn, math.tau), 0]
+            if seek_recovery and opponent:
+                action["aim"] = [math.atan2(oy - y, ox - x), 0]
+            else:
+                action["aim"] = [math.remainder(now * 0.85 * self.turn, math.tau), 0]
             action["reload"] = gun["ammo"] < gun_stats["mag"] and not gun["reload"]
         if obs["offer"]:
             priorities = ["armor", "plating", "nanites", "servos", "reactor"]
