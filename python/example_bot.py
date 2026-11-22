@@ -2,10 +2,11 @@
 import math
 
 import mechfight as mf
+from arena_nav import Arena
 
 
 class Bot:
-    name = "Orbit Salvager"
+    name = "Orbit Surveyor"
 
     def __init__(self, hello: mf.Hello):
         self.anchor = None
@@ -13,6 +14,7 @@ class Bot:
         self.jet_until = 0
         self.turn = 1 if hello["slot"] % 2 else -1
         self.rules = hello["config"]
+        self.arena = Arena(hello["map"]["dir"], self.rules["mech"]["step_up"])
         self.drone_range = self.rules["npc"]["aggro_range"]
 
     def act(self, obs: mf.Observation) -> mf.Action:
@@ -64,6 +66,18 @@ class Bot:
                 if cost < best_cost:
                     best_cost = cost
                     move = [dx, dy]
+            # Keep the preferred heading on clear ground. Probe alternatives only at obstacles.
+            preferred = math.atan2(move[1], move[0])
+            clearance = me["stats"]["radius"]
+            height = me["stats"]["height"]
+            probe = min(stride, 10)
+            for offset in (0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6):
+                heading = preferred + self.turn * offset * math.pi / 6
+                dx, dy = math.cos(heading), math.sin(heading)
+                if all(self.arena.clear(x + dx * probe * f, y + dy * probe * f,
+                                        z, clearance, height) for f in (0.3, 0.65, 1)):
+                    move = [dx, dy]
+                    break
             if self.anchor is None:
                 self.anchor, self.anchor_time = (x, y), now
             elif now - self.anchor_time >= 1.2:
