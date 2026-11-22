@@ -11,12 +11,29 @@ class Arena:
         self.bounds = world["bounds"]
         self.step_up = step_up
         self.cells = defaultdict(list)
+        self.roofs = []
         for prism in world["prisms"]:
             rings = [prism["ring"], *prism["holes"]]
             loops = []
             for ring in rings:
                 points = list(zip(ring[::2], ring[1::2]))
                 loops.append(list(zip(points, points[1:] + points[:1])))
+            if prism["kind"] == "building" and not prism["holes"]:
+                edges = loops[0]
+                winding = 1 if sum(ax*by - ay*bx for (ax, ay), (bx, by) in edges) > 0 else -1
+                for (ax, ay), (bx, by) in edges:
+                    length = math.hypot(bx-ax, by-ay)
+                    if length < 15:
+                        continue
+                    nx, ny = winding * (ay-by)/length, winding * (bx-ax)/length
+                    mx, my = (ax+bx)/2, (ay+by)/2
+                    launch = (mx - 6*nx, my - 6*ny)
+                    landing = (mx + 6*nx, my + 6*ny)
+                    lx, ly = landing
+                    crossings = sum((y1 > ly) != (y2 > ly) and lx < x1 + (x2-x1)*(ly-y1)/(y2-y1)
+                                    for (x1,y1), (x2,y2) in edges)
+                    if crossings % 2:
+                        self.roofs.append((launch, landing, prism["top"]))
             xs, ys = rings[0][::2], rings[0][1::2]
             for i in range(math.floor(min(xs) / 16), math.floor(max(xs) / 16) + 1):
                 for j in range(math.floor(min(ys) / 16), math.floor(max(ys) / 16) + 1):
@@ -64,3 +81,27 @@ class Arena:
             if not self.clear(x + t * (ox - x), y + t * (oy - y), sample_z, 0, 0.01):
                 return True
         return False
+
+    def choose_roof(self, me, zone):
+        x, y, z = me["pos"]
+        stats = me["stats"]
+        radius, height = stats["radius"], stats["height"]
+        # Leave energy for the crossing and for recovering from an interrupted climb.
+        climb = min(32, (me["energy"] - 25) * stats["max_rise_speed"] / stats["jet_drain"])
+        best_distance = 45
+        best = None
+        for launch, landing, top in self.roofs:
+            distance = math.dist((x, y), launch)
+            if distance >= best_distance or not 8 <= top - z <= climb:
+                continue
+            if any(math.dist(point, zone["next_center"]) > zone["next_radius"] - 12
+                   for point in (launch, landing)):
+                continue
+            if not self.clear(*landing, top, radius, height):
+                continue
+            steps = max(1, math.ceil(distance / 3))
+            if all(self.clear(x + (launch[0]-x)*i/steps, y + (launch[1]-y)*i/steps,
+                              z, radius, height) for i in range(1, steps + 1)):
+                best_distance = distance
+                best = (launch, landing, top)
+        return best
