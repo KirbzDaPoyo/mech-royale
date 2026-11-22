@@ -5,13 +5,12 @@ import mechfight as mf
 
 
 class Bot:
-    name = "Orbit Sprinter"
+    name = "Orbit Forager"
 
     def __init__(self, hello: mf.Hello):
         self.anchor = None
         self.anchor_time = 0
         self.jet_until = 0
-        self.sprint_until = 0
         self.turn = 1 if hello["slot"] % 2 else -1
         self.rules = hello["config"]
         self.drone_range = self.rules["npc"]["aggro_range"]
@@ -46,6 +45,16 @@ class Bot:
         opponents = [m for m in obs["mechs"] if m["kind"] == "mech"
                      and horizontal(m) <= gun["stats"]["range"]]
         opponent = min(opponents, key=horizontal, default=None)
+        # Close on safe crates while firing so their cubes are within reach when they break.
+        crate_goal = None
+        if not goal and not opponent and not threats and me["in_zone"] and me["cubes"] < self.rules["cubes"]["stat_cap"]:
+            candidates = [item for item in (*obs["cubes"], *obs["crates"])
+                          if horizontal(item) < 120 and abs(item["pos"][2] - z) <= 4
+                          and math.dist(item["pos"][:2], (cx, cy)) < radius - margin]
+            if candidates:
+                goal = min(candidates, key=lambda item: ("hp" in item, horizontal(item)))
+                if "hp" in goal:
+                    crate_goal = goal
         strafe = None
         if opponent:
             ox, oy = opponent["pos"][:2]
@@ -87,24 +96,8 @@ class Bot:
             self.jet_until = 0
 
         jet = now < self.jet_until
-        # Spend energy on a short ground sprint when the current strafe is under fire.
-        if opponent and me["grounded"] and me["energy"] >= 0.65 * me["max_energy"]:
-            damaged = any(e["type"] == "damaged" and e.get("by") is not None
-                          for e in obs["events"])
-            aimed_laser = False
-            for enemy in opponents:
-                if enemy.get("charging"):
-                    ex, ey = enemy["pos"][:2]
-                    bearing = math.atan2(y - ey, x - ex)
-                    if abs(math.remainder(bearing - enemy["aim"][0], math.tau)) < 0.22:
-                        aimed_laser = True
-                        break
-            if damaged or aimed_laser:
-                self.sprint_until = now + 0.8
-        sprint = (now < self.sprint_until and opponent is not None and me["grounded"]
-                  and me["energy"] > 0.45 * me["max_energy"])
         action = {"tick": obs["tick"], "move": move, "jump": jet and me["grounded"],
-                  "boost": jet or sprint or (not me["in_zone"] and me["grounded"] and me["energy"] > 35)}
+                  "boost": jet or (not me["in_zone"] and me["grounded"] and me["energy"] > 35)}
         nearby = min(pickups, key=horizontal, default=None)
         if nearby and horizontal(nearby) <= self.rules["loot"]["pickup_radius"]:
             action["take"] = nearby["id"]
@@ -114,6 +107,8 @@ class Bot:
         targets = [m for m in obs["mechs"] if horizontal(m) <= max_range
                    and (m["kind"] == "mech" or horizontal(m) < self.drone_range)]
         target = min(targets, key=horizontal, default=None)
+        if target is None:
+            target = crate_goal
         if target is None:
             target = min((c for c in obs["crates"] if horizontal(c) < 120),
                          key=horizontal, default=None)
