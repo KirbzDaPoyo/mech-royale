@@ -5,7 +5,7 @@ import mechfight as mf
 
 
 class Bot:
-    name = "Orbit Strider 20"
+    name = "Orbit Strider 0"
 
     def __init__(self, hello: mf.Hello):
         self.anchor = None
@@ -25,7 +25,9 @@ class Bot:
         distance = math.hypot(cx - x, cy - y)
         threats = []
         for actor in obs["mechs"]:
-            reach = 20 if actor["kind"] == "mech" else self.drone_range + 12
+            if actor["kind"] != "npc":
+                continue
+            reach = self.drone_range + 12
             ax, ay = actor["pos"][:2]
             if math.hypot(ax - x, ay - y) < reach:
                 threats.append((ax, ay, reach))
