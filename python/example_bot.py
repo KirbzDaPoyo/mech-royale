@@ -2,11 +2,10 @@
 import math
 
 import mechfight as mf
-from arena_nav import Arena
 
 
 class Bot:
-    name = "Orbit Perch"
+    name = "Orbit Courier"
 
     def __init__(self, hello: mf.Hello):
         self.anchor = None
@@ -14,10 +13,6 @@ class Bot:
         self.jet_until = 0
         self.turn = 1 if hello["slot"] % 2 else -1
         self.rules = hello["config"]
-        self.arena = Arena(hello["map"]["dir"], self.rules["mech"]["step_up"])
-        self.roof = None
-        self.next_roof_check = 0
-        self.launching = False
         self.drone_range = self.rules["npc"]["aggro_range"]
 
     def act(self, obs: mf.Observation) -> mf.Action:
@@ -55,10 +50,25 @@ class Bot:
             ox, oy = opponent["pos"][:2]
             separation = max(1, math.hypot(ox - x, oy - y))
             strafe = (self.turn * (y - oy) / separation, self.turn * (ox - x) / separation)
+        hold_drop = False
+        if me["in_zone"] and not opponent and not threats:
+            eligible = []
+            for drop in obs.get("drops", []):
+                gap = horizontal(drop)
+                travel = max(0, gap - drop["radius"] / 2) / me["stats"]["walk_speed"]
+                inside_next = math.dist(drop["pos"][:2], (cx, cy)) + drop["radius"] <= radius
+                if (inside_next and travel <= 12 and drop["lands_in"] <= travel + 2
+                        and drop["holder"] in (None, me["id"])
+                        and (gap > drop["radius"] or abs(z - drop["pos"][2]) <= 4)):
+                    eligible.append(drop)
+            if eligible:
+                goal = min(eligible, key=horizontal)
+                margin = min(margin, goal["radius"])
+                hold_drop = horizontal(goal) <= goal["radius"] / 2
         must_move = strafe or distance > max(1, radius - margin) or threats or not me["in_zone"] or goal
         move = [0.0, 0.0]
         now = obs["t"]
-        if must_move:
+        if must_move and not hold_drop:
             inward = math.atan2(cy - y, cx - x)
             stride = min(14, max(1, distance)) if radius < 15 else 14
             if goal:
@@ -93,11 +103,6 @@ class Bot:
         jet = now < self.jet_until
         action = {"tick": obs["tick"], "move": move, "jump": jet and me["grounded"],
                   "boost": jet or (not me["in_zone"] and me["grounded"] and me["energy"] > 35)}
-        if must_move:
-            self.roof = None
-            self.launching = False
-        else:
-            self.approach_roof(action, me, zone, now)
         nearby = min(pickups, key=horizontal, default=None)
         if nearby and horizontal(nearby) <= self.rules["loot"]["pickup_radius"]:
             action["take"] = nearby["id"]
@@ -140,34 +145,6 @@ class Bot:
             action["pick"] = min(range(len(choices)), key=lambda i:
                 priorities.index(choices[i]["id"]) if choices[i]["id"] in priorities else len(priorities))
         return action
-
-    def approach_roof(self, action, me, zone, now):
-        x, y, z = me["pos"]
-        stats = me["stats"]
-        if self.roof is None:
-            if now < self.next_roof_check or not me["grounded"]:
-                return
-            self.next_roof_check = now + 2
-            self.roof = self.arena.choose_roof(me, zone)
-            if self.roof is None:
-                return
-            self.roof_deadline = now + 12
-        launch, landing, top = self.roof
-        arrived = me["grounded"] and abs(z - top) < 1 and math.dist((x, y), landing) <= 4
-        if (arrived or now >= self.roof_deadline or me["energy"] < 12
-                or math.dist(landing, zone["next_center"]) > zone["next_radius"] - 12):
-            self.roof = None
-            self.launching = False
-            self.next_roof_check = now + 10
-            return
-        if math.dist((x, y), launch) <= 2:
-            self.launching = True
-        target = landing if self.launching else launch
-        dx, dy = target[0] - x, target[1] - y
-        length = max(1, math.hypot(dx, dy))
-        action["move"] = [dx / length, dy / length]
-        action["jump"] = self.launching and me["grounded"] and z < top - 1
-        action["boost"] = self.launching and not me["grounded"] and z < top + 1
 
 
 if __name__ == "__main__":
