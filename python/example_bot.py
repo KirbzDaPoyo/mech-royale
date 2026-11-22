@@ -5,14 +5,15 @@ import mechfight as mf
 
 
 class Bot:
-    name = "Quiet Orbit"
+    name = "Orbit Salvager"
 
     def __init__(self, hello: mf.Hello):
         self.anchor = None
         self.anchor_time = 0
         self.jet_until = 0
         self.turn = 1 if hello["slot"] % 2 else -1
-        self.drone_range = hello["config"]["vision"]["near_range"]
+        self.rules = hello["config"]
+        self.drone_range = self.rules["npc"]["aggro_range"]
 
     def act(self, obs: mf.Observation) -> mf.Action:
         me = obs["self"]
@@ -29,14 +30,25 @@ class Bot:
             if math.hypot(ax - x, ay - y) < reach:
                 threats.append((ax, ay, reach))
 
-        # Stand still when safely inside the upcoming circle and undisturbed.
-        # When moving, score short candidate paths against both circles and nearby actors.
-        must_move = distance > max(1, radius - margin) or threats or not me["in_zone"]
+        gun, secondary = me["weapons"]
+        def horizontal(item):
+            return math.dist((x, y), item["pos"][:2])
+
+        pickups = [p for p in obs["pickups"] if p["kind"] in ("lightning", "laser")
+                   and secondary is None and abs(p["pos"][2] - z) <= 4]
+        resources = [item for item in obs["cubes"] if abs(item["pos"][2] - z) <= 4]
+        resources.extend(pickups)
+        goal = min((item for item in resources if horizontal(item) < 65
+                    and math.dist(item["pos"][:2], (cx, cy)) < radius - margin),
+                   key=horizontal, default=None)
+        must_move = distance > max(1, radius - margin) or threats or not me["in_zone"] or goal
         move = [0.0, 0.0]
         now = obs["t"]
         if must_move:
             inward = math.atan2(cy - y, cx - x)
             stride = min(14, max(1, distance)) if radius < 15 else 14
+            if goal:
+                stride = max(1, min(stride, horizontal(goal)))
             best_cost = math.inf
             for i in range(24):
                 angle = inward + self.turn * i * math.tau / 24
@@ -45,6 +57,8 @@ class Bot:
                 future_dist = math.hypot(px - cx, py - cy)
                 cost = 3 * max(0, future_dist - radius + margin)
                 cost += 6 * max(0, math.dist((px, py), zone["center"]) - zone["radius"])
+                if goal:
+                    cost += 0.65 * math.dist((px, py), goal["pos"][:2])
                 for ax, ay, reach in threats:
                     cost += max(0, reach - math.hypot(px - ax, py - ay))
                 if cost < best_cost:
@@ -63,22 +77,42 @@ class Bot:
         jet = now < self.jet_until
         action = {"tick": obs["tick"], "move": move, "jump": jet and me["grounded"],
                   "boost": jet or (not me["in_zone"] and me["grounded"] and me["energy"] > 35)}
-        enemies = [m for m in obs["mechs"] if m["kind"] == "mech"]
-        if enemies:
-            enemy = min(enemies, key=lambda m: math.dist(me["pos"], m["pos"]))
-            tx, ty, tz = enemy["pos"]
-            speed = me["weapons"][0]["stats"]["speed"]
-            delay = math.dist(me["pos"], enemy["pos"]) / speed
-            dx = tx + enemy["vel"][0] * delay - x
-            dy = ty + enemy["vel"][1] * delay - y
-            yaw = math.atan2(dy, dx)
-            action["aim"] = [yaw, math.atan2(tz + 4.5 - z - me["stats"]["muzzle_height"], math.hypot(dx, dy))]
-            aligned = abs(math.remainder(yaw - me["aim"][0], math.tau)) < 0.12
-            action["fire"] = [aligned and math.hypot(dx, dy) < 85, False]
+        nearby = min(pickups, key=horizontal, default=None)
+        if nearby and horizontal(nearby) <= self.rules["loot"]["pickup_radius"]:
+            action["take"] = nearby["id"]
+
+        gun_stats = gun["stats"]
+        max_range = max(gun_stats["range"], secondary["stats"]["range"] if secondary else 0)
+        targets = [m for m in obs["mechs"] if horizontal(m) <= max_range
+                   and (m["kind"] == "mech" or horizontal(m) < self.drone_range)]
+        target = min(targets, key=horizontal, default=None)
+        if target is None:
+            target = min((c for c in obs["crates"] if horizontal(c) < 120),
+                         key=horizontal, default=None)
+        if target:
+            kind = target.get("kind", "crate")
+            heights = {"mech": self.rules["mech"]["height"], "npc": self.rules["npc"]["height"],
+                       "crate": self.rules["crates"]["height"]}
+            tx, ty, tz = target["pos"]
+            dist = math.dist(target["pos"], me["pos"])
+            laser = secondary and secondary["kind"] == "laser" and secondary["cooldown"] <= 0
+            delay = 0 if laser else dist / gun_stats["speed"]
+            vx, vy, vz = target.get("vel", (0, 0, 0))
+            dx, dy = tx + vx * delay - x, ty + vy * delay - y
+            dz = tz + heights[kind] / 2 + vz * delay - z - me["stats"]["muzzle_height"]
+            yaw, pitch = math.atan2(dy, dx), math.atan2(dz, math.hypot(dx, dy))
+            action["aim"] = [yaw, pitch]
+            aligned = (abs(math.remainder(yaw - me["aim"][0], math.tau)) < 0.12
+                       and abs(pitch - me["aim"][1]) < 0.12)
+            use_secondary = False
+            if laser and dist <= secondary["stats"]["range"]:
+                use_secondary = secondary.get("charge", 0) < secondary["stats"]["charge"] or not aligned
+            elif secondary and secondary["kind"] == "lightning":
+                use_secondary = aligned and dist <= secondary["stats"]["range"]
+            action["fire"] = [aligned and dist <= gun_stats["range"], use_secondary]
         else:
             action["aim"] = [math.remainder(now * 0.85 * self.turn, math.tau), 0]
-            gun = me["weapons"][0]
-            action["reload"] = gun["ammo"] < gun["stats"]["mag"] and not gun["reload"]
+            action["reload"] = gun["ammo"] < gun_stats["mag"] and not gun["reload"]
         if obs["offer"]:
             priorities = ["armor", "plating", "nanites", "servos", "reactor"]
             choices = obs["offer"]["choices"]
